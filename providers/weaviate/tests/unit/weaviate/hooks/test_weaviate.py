@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 from __future__ import annotations
-
+import httpx
 import json
 from unittest import mock
 from unittest.mock import MagicMock, Mock
@@ -170,7 +170,7 @@ class TestWeaviateHook:
         mock_auth_api_key.assert_called_once_with(api_key=self.api_key)
         mock_connect_to_custom.assert_called_once_with(
             http_host=self.host,
-            http_port=80,
+            http_port=8000,
             http_secure=False,
             grpc_host="localhost",
             grpc_port=50051,
@@ -187,7 +187,7 @@ class TestWeaviateHook:
         mock_auth_api_key.assert_called_once_with(api_key=self.api_key)
         mock_connect_to_custom.assert_called_once_with(
             http_host=self.host,
-            http_port=80,
+            http_port=8000,
             http_secure=False,
             grpc_host="localhost",
             grpc_port=50051,
@@ -205,7 +205,7 @@ class TestWeaviateHook:
         )
         mock_connect_to_custom.assert_called_once_with(
             http_host=self.host,
-            http_port=80,
+            http_port=8000,
             http_secure=False,
             grpc_host="localhost",
             grpc_port=50051,
@@ -225,7 +225,7 @@ class TestWeaviateHook:
         )
         mock_connect_to_custom.assert_called_once_with(
             http_host=self.host,
-            http_port=80,
+            http_port=8000,
             http_secure=False,
             grpc_host="localhost",
             grpc_port=50051,
@@ -241,7 +241,7 @@ class TestWeaviateHook:
         mock_auth_client_password.assert_called_once_with(username="login", password="password", scope=None)
         mock_connect_to_custom.assert_called_once_with(
             http_host=self.host,
-            http_port=80,
+            http_port=8000,
             http_secure=False,
             grpc_host="localhost",
             grpc_port=50051,
@@ -663,15 +663,21 @@ def test_batch_data_retry(weaviate_hook):
 @mock.patch("airflow.providers.weaviate.hooks.weaviate.WeaviateHook.get_conn")
 def test_delete_collections(get_conn, weaviate_hook):
     collection_names = ["collection_a", "collection_b"]
+    
+    # weaviate.UnexpectedStatusCodeException expects httpx.Response but the code was using requests.Response
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 500
+    mock_response.json.return_value = {}
+    
     get_conn.return_value.collections.delete.side_effect = [
-        weaviate.UnexpectedStatusCodeException("something failed", requests.Response()),
+        weaviate.UnexpectedStatusCodeException(message="something failed", response=mock_response),
         None,
     ]
     error_list = weaviate_hook.delete_collections(collection_names, if_error="continue")
     assert error_list == ["collection_a"]
 
     get_conn.return_value.collections.delete.side_effect = weaviate.UnexpectedStatusCodeException(
-        "something failed", requests.Response()
+        message="something failed", response=mock_response
     )
     with pytest.raises(weaviate.UnexpectedStatusCodeException):
         weaviate_hook.delete_collections("class_a", if_error="stop")
@@ -725,8 +731,11 @@ def test__delete_objects(delete_object, weaviate_hook):
     requests.exceptions.HTTPError(response=resp)
     http_429_exception = requests.exceptions.HTTPError(response=resp)
 
-    resp = requests.Response()
+    # weaviate.UnexpectedStatusCodeException expects httpx.Response but the code was using requests.Response
+    resp = Mock(httpx.Response)
     resp.status_code = 404
+    resp.json = Mock(return_value={"message": "object not found"})
+    
     not_found_exception = weaviate.exceptions.UnexpectedStatusCodeException(
         message="object not found", response=resp
     )
